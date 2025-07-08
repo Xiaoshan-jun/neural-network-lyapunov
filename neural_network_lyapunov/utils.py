@@ -4,6 +4,8 @@ import cvxpy as cp
 import gurobipy
 import neural_network_lyapunov.gurobi_torch_mip as gurobi_torch_mip
 import scipy.integrate
+import torch.optim as optim
+from torch.utils.data import DataLoader
 
 
 def update_progress(progress):
@@ -1320,6 +1322,45 @@ def train_approximator(dataset,
                   f" test loss {test_loss}")
         model_params.append(extract_relu_parameters(model))
     pass
+
+def distill(student_model, teacher_model, dataset,
+            batch_size=32, num_epochs=100, lr=1e-3,
+            loss_fn=None, device=None):
+    """
+    Train `student_model` to mimic `teacher_model` on given `dataset`.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    teacher_model.eval()
+    teacher_model.to(device)
+    student_model.train()
+    student_model.to(device)
+
+    if loss_fn is None:
+        loss_fn = nn.MSELoss()
+
+    optimizer = optim.Adam(student_model.parameters(), lr=lr)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    for epoch in range(num_epochs):
+        total_loss = 0.0
+        for xu in loader:
+            xu = xu[0].to(device)
+            with torch.no_grad():
+                teacher_output = teacher_model(xu)
+
+            student_output = student_model(xu)
+            loss = loss_fn(student_output, teacher_output)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * xu.size(0)
+
+        avg_loss = total_loss / len(dataset)
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(f"[Epoch {epoch+1}/{num_epochs}] Distillation Loss: {avg_loss:.6f}")
 
 
 def uniform_sample_in_box(lo: torch.Tensor, hi: torch.Tensor,

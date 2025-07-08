@@ -5,7 +5,7 @@ import gym
 import neural_network_lyapunov.examples.quadrotor2d.quadrotor_2d as \
     quadrotor_2d
 
-
+#it is a gym environment
 class Quadrotor2DEnv(gym.Env):
     def __init__(self):
         super(Quadrotor2DEnv, self).__init__()

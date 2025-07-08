@@ -206,16 +206,16 @@ def simulate_quadrotor_with_controller(controller_relu, t_span, x_equilibrium,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="quadrotor 2d training demo")
-    parser.add_argument("--generate_dynamics_data", action="store_true")
+    parser.add_argument("--generate_dynamics_data", action="store_true", default= True)
     parser.add_argument("--load_dynamics_data",
                         type=str,
                         default=None,
-                        help="path to the dynamics data.")
-    parser.add_argument("--train_forward_model", action="store_true")
+                        help="quadrotor_dataset.pt")
+    parser.add_argument("--train_forward_model", action="store_true", default = True)
     parser.add_argument("--load_forward_model",
                         type=str,
                         default=None,
-                        help="path to load dynamics model")
+                        help="trainedModel/forwardnn.pth")
     parser.add_argument("--load_lyapunov_relu",
                         type=str,
                         default=None,
@@ -224,11 +224,11 @@ if __name__ == "__main__":
                         type=str,
                         default=None,
                         help="path to the controller data.")
-    parser.add_argument("--train_lqr_approximator", action="store_true")
-    parser.add_argument("--search_R", action="store_true")
-    parser.add_argument("--train_on_samples", action="store_true")
-    parser.add_argument("--enable_wandb", action="store_true")
-    parser.add_argument("--train_adversarial", action="store_true")
+    parser.add_argument("--train_lqr_approximator", action="store_true", default = True)
+    parser.add_argument("--search_R", action="store_true", default = True)
+    parser.add_argument("--train_on_samples", action="store_true", default = True)
+    parser.add_argument("--enable_wandb", action="store_true", default = False)
+    parser.add_argument("--train_adversarial", action="store_true", default = True)
     parser.add_argument("--max_iterations", type=int, default=5000)
     parser.add_argument("--training_set", type=str, default=None)
     args = parser.parse_args()
@@ -236,18 +236,21 @@ if __name__ == "__main__":
     dt = 0.01
     dtype = torch.float64
     if args.generate_dynamics_data:
+        print("generate dynamic dataset")
         model_dataset = generate_quadrotor_dynamics_data(dt)
+        torch.save((model_dataset.tensors[0], model_dataset.tensors[1]), "quadrotor_dataset.pt")
 
     if args.load_dynamics_data is not None:
         model_dataset = torch.load(args.load_dynamics_data)
 
     if args.train_forward_model:
+        print('initialize forward nn model')
         forward_model = utils.setup_relu((4, 6, 6, 3),
                                          params=None,
                                          bias=True,
                                          negative_slope=0.01,
                                          dtype=dtype)
-        train_forward_model(forward_model, model_dataset, num_epochs=100)
+        train_forward_model(forward_model, model_dataset, num_epochs=10)
 
     if args.load_forward_model:
         forward_model_data = torch.load(args.load_forward_model)
@@ -322,9 +325,11 @@ if __name__ == "__main__":
     if args.train_lqr_approximator:
         x_equilibrium = torch.cat(
             (q_equilibrium, torch.zeros((3, ), dtype=dtype)))
+        print('training controller')
         train_lqr_control_approximator(controller_relu, x_equilibrium,
                                        u_equilibrium, x_lo, x_up, 100000,
                                        torch.from_numpy(K))
+        print('training lyapunov_relu')
         train_lqr_value_approximator(lyapunov_relu, V_lambda, R, x_equilibrium,
                                      x_lo, x_up, 100000, torch.from_numpy(S))
     forward_system = relu_system.ReLUSecondOrderResidueSystemGivenEquilibrium(
@@ -352,7 +357,7 @@ if __name__ == "__main__":
         R_options.set_variable_value(R.detach().numpy())
     else:
         R_options = r_options.FixedROptions(R)
-    dut = train_lyapunov_barrier.Trainer()
+    dut = train_lyapunov_barrier.Trainer() #lyapunoc barrier trainer
     dut.add_lyapunov(lyap, V_lambda, closed_loop_system.x_equilibrium,
                      R_options)
     dut.lyapunov_positivity_mip_pool_solutions = 1

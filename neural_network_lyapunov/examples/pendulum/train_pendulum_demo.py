@@ -89,6 +89,7 @@ def generate_pendulum_dynamics_data(dt):
     return torch.utils.data.TensorDataset(dataset_input, dataset_output)
 
 
+
 def train_forward_model(dynamics_model, model_dataset):
     state_equilibrium = torch.tensor([np.pi, 0], dtype=torch.float64)
     control_equilibrium = torch.tensor([0], dtype=torch.float64)
@@ -110,6 +111,17 @@ def train_forward_model(dynamics_model, model_dataset):
                              num_epochs=100,
                              lr=0.001)
 
+def distill(large_dynamic_model, new_model, model_dataset):
+    state_equilibrium = torch.tensor([np.pi, 0], dtype=torch.float64)
+    control_equilibrium = torch.tensor([0], dtype=torch.float64)
+    # model_dataset contains the mapping from (x[n], u[n]) to x[n+1], but we
+    # only need a mapping from (x[n], u[n]) to v[n+1]. So we regenerate a
+    # dataset whose target
+    (xu_inputs, x_next_outputs) = model_dataset[:]
+    v_dataset = torch.utils.data.TensorDataset(
+        xu_inputs, x_next_outputs[:, 1].reshape((-1, 1)))
+    utils.distill(new_model, large_dynamic_model, v_dataset)
+    pass
 
 def generate_controller_dataset():
     """
@@ -227,24 +239,24 @@ def pendulum_closed_loop_dynamics(plant: pendulum.Pendulum, x: np.ndarray,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="pendulum training demo")
-    parser.add_argument("--generate_dynamics_data", action="store_true")
+    parser.add_argument("--generate_dynamics_data", action="store_true", default= False)
     parser.add_argument("--load_dynamics_data",
                         type=str,
                         default=None,
                         help="path of the dynamics data")
-    parser.add_argument("--train_forward_model", action="store_true")
-    parser.add_argument("--generate_controller_cost_data", action="store_true")
-    parser.add_argument("--train_controller_approximator", action="store_true")
-    parser.add_argument("--train_cost_approximator", action="store_true")
-    parser.add_argument("--load_controller_cost_data", action="store_true")
+    parser.add_argument("--train_forward_model", action="store_true", default= False)
+    parser.add_argument("--generate_controller_cost_data", action="store_true",  default= True)
+    parser.add_argument("--train_controller_approximator", action="store_true", default= False)
+    parser.add_argument("--train_cost_approximator", action="store_true", default= False)
+    parser.add_argument("--load_controller_cost_data", action="store_true", default= True)
     parser.add_argument("--load_lyapunov_relu",
                         type=str,
-                        default=None,
-                        help="path of the saved lyapunov_relu state_dict()")
+                        default="/data/pendulum_lyapunov4.pt",
+                        help="/data/pendulum_lyapunov4.pt")
     parser.add_argument("--load_controller_relu",
                         type=str,
-                        default=None,
-                        help="path of the controller relu state_dict()")
+                        default="/data/pendulum_controller4.pt",
+                        help="/data/pendulum_controller4.pt")
     parser.add_argument("--pretrain_num_epochs",
                         type=int,
                         default=100,
@@ -260,14 +272,16 @@ if __name__ == "__main__":
     parser.add_argument("--train_on_samples",
                         action="store_true",
                         help="pretrain Lyapunov controller on samples.")
-    parser.add_argument("--enable_wandb", action="store_true")
+    parser.add_argument("--enable_wandb", action="store_true", default=False)
     parser.add_argument("--train_adversarial", action="store_true")
     args = parser.parse_args()
     dir_path = os.path.dirname(os.path.realpath(__file__))
     dt = 0.01
     if args.generate_dynamics_data:
+        print('generate dynamics data')
         model_dataset = generate_pendulum_dynamics_data(dt)
     if args.load_dynamics_data is not None:
+        print('load generate dynamic data from'. args.load_dynamics_data)
         data = torch.load(args.load_dynamics_data)
         model_dataset = torch.utils.data.TensorDataset(data["input"],
                                                        data["output"])
@@ -278,8 +292,16 @@ if __name__ == "__main__":
                                       bias=True,
                                       dtype=torch.float64)
     if args.train_forward_model:
+        print('train forward model')
         train_forward_model(dynamics_model, model_dataset)
+        torch.save({
+            "state_dict": dynamics_model.state_dict(),
+            "linear_layer_width": [layer.in_features for layer in dynamics_model if hasattr(layer, "in_features")] + [
+                1],
+            "negative_slope": 0.01
+        }, "/data/pendulum_second_order_forward_relu3.pt")
     else:
+        print('load forward model from ')
         dynamics_model_data = torch.load(
             dir_path + "/data/pendulum_second_order_forward_relu2.pt")
         dynamics_model = utils.setup_relu(
@@ -290,9 +312,11 @@ if __name__ == "__main__":
             dtype=torch.float64)
         dynamics_model.load_state_dict(dynamics_model_data["state_dict"])
     if args.generate_controller_cost_data:
+        print('generating controller cost data')
         state_samples, control_samples, cost_samples =\
             generate_controller_dataset()
     elif args.load_controller_cost_data:
+        print('load controller cost data')
         controller_cost_data = torch.load(
             dir_path + "/data/pendulum_controller_cost_data.pt")
         state_samples = controller_cost_data["state_samples"]
@@ -306,12 +330,14 @@ if __name__ == "__main__":
                                        bias=True,
                                        dtype=torch.float64)
     if args.train_controller_approximator:
+        print('train controller')
         train_controller_approximator(state_samples,
                                       control_samples,
                                       controller_relu,
                                       lr=0.001)
     elif args.load_controller_relu is not None:
-        controller_data = torch.load(args.load_controller_relu)
+        print('load generate dynamic data from ', args.load_controller_relu)
+        controller_data = torch.load(dir_path + args.load_controller_relu)
         controller_relu = utils.setup_relu(
             controller_data["linear_layer_width"],
             params=None,
@@ -331,10 +357,12 @@ if __name__ == "__main__":
     R = torch.cat((rotation_matrix(np.pi / 4), rotation_matrix(np.pi / 10)),
                   dim=0)
     if args.train_cost_approximator:
+        print('train lyapunov neural network')
         train_cost_approximator(state_samples, cost_samples, lyapunov_relu,
                                 V_lambda)
     elif args.load_lyapunov_relu is not None:
-        lyapunov_data = torch.load(args.load_lyapunov_relu)
+        print('load lyapunov neural network from ', args.load_lyapunov_relu)
+        lyapunov_data = torch.load(dir_path + args.load_lyapunov_relu)
         lyapunov_relu = utils.setup_relu(
             lyapunov_data["linear_layer_width"],
             params=None,
@@ -348,10 +376,10 @@ if __name__ == "__main__":
     # Now train the controller and Lyapunov function together
     q_equilibrium = torch.tensor([np.pi], dtype=torch.float64)
     u_equilibrium = torch.tensor([0], dtype=torch.float64)
-    x_lo = torch.tensor([np.pi - 0.1 * np.pi, -0.5], dtype=torch.float64)
-    x_up = torch.tensor([np.pi + 0.1 * np.pi, 0.5], dtype=torch.float64)
-    u_lo = torch.tensor([-20], dtype=torch.float64)
-    u_up = torch.tensor([20], dtype=torch.float64)
+    x_lo = torch.tensor([np.pi - 0.2 * np.pi, -0.5], dtype=torch.float64)
+    x_up = torch.tensor([np.pi + 0.2 * np.pi, 0.5], dtype=torch.float64)
+    u_lo = torch.tensor([-1], dtype=torch.float64)
+    u_up = torch.tensor([1], dtype=torch.float64)
     forward_system = relu_system.ReLUSecondOrderSystemGivenEquilibrium(
         torch.float64, x_lo, x_up, u_lo, u_up, dynamics_model, q_equilibrium,
         u_equilibrium, dt)
