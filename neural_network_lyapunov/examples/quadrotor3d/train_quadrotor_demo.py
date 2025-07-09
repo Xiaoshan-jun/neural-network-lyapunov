@@ -134,12 +134,12 @@ def train_lqr_control_approximator(controller_relu, x_equilibrium,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="quadrotor training demo")
-    parser.add_argument("--generate_dynamics_data", action="store_true")
+    parser.add_argument("--generate_dynamics_data", action="store_true", default= True)
     parser.add_argument("--load_dynamics_data",
                         type=str,
                         default=None,
                         help="path to the dynamics data.")
-    parser.add_argument("--train_forward_model", action="store_true")
+    parser.add_argument("--train_forward_model", action="store_true", default= True)
     parser.add_argument("--load_forward_model",
                         type=str,
                         default=None,

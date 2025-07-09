@@ -11,6 +11,7 @@ import scipy.integrate
 import numpy as np
 import argparse
 import os
+import time
 
 
 def rotation_matrix(theta):
@@ -242,9 +243,9 @@ if __name__ == "__main__":
     parser.add_argument("--generate_dynamics_data", action="store_true", default= False)
     parser.add_argument("--load_dynamics_data",
                         type=str,
-                        default=None,
+                        default="/data/dynamic.pt",
                         help="path of the dynamics data")
-    parser.add_argument("--train_forward_model", action="store_true", default= False)
+    parser.add_argument("--train_forward_model", action="store_true", default= True)
     parser.add_argument("--generate_controller_cost_data", action="store_true",  default= True)
     parser.add_argument("--train_controller_approximator", action="store_true", default= False)
     parser.add_argument("--train_cost_approximator", action="store_true", default= False)
@@ -259,7 +260,7 @@ if __name__ == "__main__":
                         help="/data/pendulum_controller4.pt")
     parser.add_argument("--pretrain_num_epochs",
                         type=int,
-                        default=100,
+                        default=50,
                         help="number of epochs in pre-training on samples.")
     parser.add_argument(
         "--max_iterations",
@@ -268,25 +269,29 @@ if __name__ == "__main__":
         help="max number of iterations in searching for controller.")
     parser.add_argument("--search_R",
                         action="store_true",
-                        help="search R when searching for controller.")
+                        help="search R when searching for controller.", default=True)
     parser.add_argument("--train_on_samples",
                         action="store_true",
-                        help="pretrain Lyapunov controller on samples.")
+                        help="pretrain Lyapunov controller on samples.", default=True)
     parser.add_argument("--enable_wandb", action="store_true", default=False)
-    parser.add_argument("--train_adversarial", action="store_true")
+    parser.add_argument("--train_adversarial", action="store_true", default=True)
     args = parser.parse_args()
     dir_path = os.path.dirname(os.path.realpath(__file__))
     dt = 0.01
     if args.generate_dynamics_data:
         print('generate dynamics data')
         model_dataset = generate_pendulum_dynamics_data(dt)
+        torch.save({
+            "input": model_dataset.tensors[0],
+            "output": model_dataset.tensors[1]
+        }, dir_path + "/data/dynamic.pt")
     if args.load_dynamics_data is not None:
-        print('load generate dynamic data from'. args.load_dynamics_data)
-        data = torch.load(args.load_dynamics_data)
+        print('load generate dynamic data from',  args.load_dynamics_data)
+        data = torch.load(dir_path + args.load_dynamics_data)
         model_dataset = torch.utils.data.TensorDataset(data["input"],
                                                        data["output"])
     # Setup forward dynamics model
-    dynamics_model = utils.setup_relu((3, 5, 5, 1),
+    dynamics_model = utils.setup_relu((3, 6, 12, 6, 1),
                                       params=None,
                                       negative_slope=0.01,
                                       bias=True,
@@ -299,7 +304,7 @@ if __name__ == "__main__":
             "linear_layer_width": [layer.in_features for layer in dynamics_model if hasattr(layer, "in_features")] + [
                 1],
             "negative_slope": 0.01
-        }, "/data/pendulum_second_order_forward_relu3.pt")
+        }, dir_path + "/data/pendulum_second_order_forward_relu_6tt1.pt")
     else:
         print('load forward model from ')
         dynamics_model_data = torch.load(
@@ -372,14 +377,14 @@ if __name__ == "__main__":
         lyapunov_relu.load_state_dict(lyapunov_data["state_dict"])
         V_lambda = lyapunov_data["V_lambda"]
         R = lyapunov_data["R"]
-
+    t0 = time.time()
     # Now train the controller and Lyapunov function together
     q_equilibrium = torch.tensor([np.pi], dtype=torch.float64)
     u_equilibrium = torch.tensor([0], dtype=torch.float64)
-    x_lo = torch.tensor([np.pi - 0.2 * np.pi, -0.5], dtype=torch.float64)
-    x_up = torch.tensor([np.pi + 0.2 * np.pi, 0.5], dtype=torch.float64)
-    u_lo = torch.tensor([-1], dtype=torch.float64)
-    u_up = torch.tensor([1], dtype=torch.float64)
+    x_lo = torch.tensor([np.pi - 1 * np.pi, -5], dtype=torch.float64)
+    x_up = torch.tensor([np.pi + 1 * np.pi, 5], dtype=torch.float64)
+    u_lo = torch.tensor([-20], dtype=torch.float64)
+    u_up = torch.tensor([20], dtype=torch.float64)
     forward_system = relu_system.ReLUSecondOrderSystemGivenEquilibrium(
         torch.float64, x_lo, x_up, u_lo, u_up, dynamics_model, q_equilibrium,
         u_equilibrium, dt)
@@ -417,7 +422,7 @@ if __name__ == "__main__":
     if args.train_on_samples:
         dut.train_lyapunov_on_samples(state_samples_all,
                                       num_epochs=args.pretrain_num_epochs,
-                                      batch_size=50)
+                                      batch_size=128)
 
     dut.enable_wandb = args.enable_wandb
     if args.train_adversarial:
@@ -433,6 +438,7 @@ if __name__ == "__main__":
         derivative_state_samples_init = positivity_state_samples_init
         result = dut.train_adversarial(positivity_state_samples_init,
                                        derivative_state_samples_init, options)
+        print('time: ', time.time() - t0)
     else:
         dut.train(torch.empty((0, 2), dtype=torch.float64))
     pass

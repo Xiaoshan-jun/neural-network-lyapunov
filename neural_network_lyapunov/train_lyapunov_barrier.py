@@ -1329,7 +1329,7 @@ class Trainer:
             if self.output_flag:
                 print(f"Iter {iter_count}, positivity cost " +
                       f"{lyapunov_positivity_mip_obj}, " + "derivative_cost " +
-                      f"{lyapunov_derivative_mip_obj}")
+                      f"{lyapunov_derivative_mip_obj}" + f"time{time.time() - train_start_time}")
             if self.enable_wandb:
                 wandb.log({
                     "positivity MIP cost": lyapunov_positivity_mip_obj,

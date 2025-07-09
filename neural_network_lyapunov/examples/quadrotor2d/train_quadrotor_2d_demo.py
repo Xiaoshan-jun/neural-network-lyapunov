@@ -15,6 +15,7 @@ import scipy.integrate
 import gurobipy
 import argparse
 import os
+import matplotlib.pyplot as plt
 
 
 def generate_quadrotor_dynamics_data(dt):
@@ -204,27 +205,57 @@ def simulate_quadrotor_with_controller(controller_relu, t_span, x_equilibrium,
     return result
 
 
+def evaluate_controller(controller, x0_grid, t_span, threshold=0.1):
+    x_equilibrium = torch.zeros((6,), dtype=torch.float64)
+    u_lo = torch.tensor([-8, -8], dtype=torch.float64)
+    u_up = torch.tensor([8, 8], dtype=torch.float64)
+
+    success_mask = []
+    for x0 in x0_grid:
+        result = simulate_quadrotor_with_controller(controller, t_span, x_equilibrium, u_lo, u_up, x0)
+        final_state = result.y[:, -1]
+        dist = np.linalg.norm(final_state - x_equilibrium.numpy())
+        success_mask.append(dist < threshold)
+    return success_mask
+
+
+def plot_stabilization_result(x0_grid, success_mask, title="Stabilization Result", projection=(3, 4)):
+    """
+    projection: tuple of indices to plot, e.g., (2, 5) for (theta, thetadot)
+    """
+    x = np.array([x[p] for x in x0_grid for p in [projection[0]]])
+    y = np.array([x[p] for x in x0_grid for p in [projection[1]]])
+    colors = ['green' if s else 'red' for s in success_mask]
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(x, y, c=colors, s=10, alpha=0.8)
+    plt.xlabel(f"$x[{projection[0]}]$")
+    plt.ylabel(f"$x[{projection[1]}]$")
+    plt.title(title)
+    plt.grid(True)
+    plt.show()
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="quadrotor 2d training demo")
     parser.add_argument("--generate_dynamics_data", action="store_true", default= True)
     parser.add_argument("--load_dynamics_data",
                         type=str,
-                        default=None,
-                        help="quadrotor_dataset.pt")
+                        default="/data/dynamic.pt",
+                        help="path of the dynamics data")
     parser.add_argument("--train_forward_model", action="store_true", default = True)
     parser.add_argument("--load_forward_model",
                         type=str,
-                        default=None,
-                        help="trainedModel/forwardnn.pth")
+                        default='/data/second_order_forward_relu1.pt',
+                        help="path of the forward model")
     parser.add_argument("--load_lyapunov_relu",
                         type=str,
-                        default=None,
+                        default="/data/lyapunov4.pt",
                         help="path to the lyapunov model data.")
     parser.add_argument("--load_controller_relu",
                         type=str,
-                        default=None,
+                        default="/data/controller4.pt",
                         help="path to the controller data.")
-    parser.add_argument("--train_lqr_approximator", action="store_true", default = True)
+    parser.add_argument("--train_lqr_approximator", action="store_true", default = False)
     parser.add_argument("--search_R", action="store_true", default = True)
     parser.add_argument("--train_on_samples", action="store_true", default = True)
     parser.add_argument("--enable_wandb", action="store_true", default = False)
@@ -238,10 +269,9 @@ if __name__ == "__main__":
     if args.generate_dynamics_data:
         print("generate dynamic dataset")
         model_dataset = generate_quadrotor_dynamics_data(dt)
-        torch.save((model_dataset.tensors[0], model_dataset.tensors[1]), "quadrotor_dataset.pt")
-
-    if args.load_dynamics_data is not None:
-        model_dataset = torch.load(args.load_dynamics_data)
+        torch.save((model_dataset.tensors[0], model_dataset.tensors[1]), dir_path + "/data/dynamic.pt")
+    elif args.load_dynamics_data is not None:
+        model_dataset = torch.load(dir_path + args.load_dynamics_data)
 
     if args.train_forward_model:
         print('initialize forward nn model')
@@ -251,9 +281,8 @@ if __name__ == "__main__":
                                          negative_slope=0.01,
                                          dtype=dtype)
         train_forward_model(forward_model, model_dataset, num_epochs=10)
-
-    if args.load_forward_model:
-        forward_model_data = torch.load(args.load_forward_model)
+    elif args.load_forward_model:
+        forward_model_data = torch.load(dir_path + args.load_forward_model)
         forward_model = utils.setup_relu(
             forward_model_data["linear_layer_width"],
             params=None,
@@ -286,7 +315,7 @@ if __name__ == "__main__":
                                      dtype=dtype)
     V_lambda = 0.9
     if args.load_lyapunov_relu is not None:
-        lyapunov_data = torch.load(args.load_lyapunov_relu)
+        lyapunov_data = torch.load(dir_path + args.load_lyapunov_relu)
         lyapunov_relu = utils.setup_relu(
             lyapunov_data["linear_layer_width"],
             params=None,
@@ -303,7 +332,7 @@ if __name__ == "__main__":
                                        bias=True,
                                        dtype=dtype)
     if args.load_controller_relu is not None:
-        controller_data = torch.load(args.load_controller_relu)
+        controller_data = torch.load(dir_path + args.load_controller_relu)
         controller_relu = utils.setup_relu(
             controller_data["linear_layer_width"],
             params=None,
@@ -311,6 +340,7 @@ if __name__ == "__main__":
             bias=controller_data["bias"],
             dtype=dtype)
         controller_relu.load_state_dict(controller_data["state_dict"])
+
 
     q_equilibrium = torch.tensor([0, 0, 0], dtype=dtype)
     u_equilibrium = plant.u_equilibrium
@@ -322,6 +352,8 @@ if __name__ == "__main__":
     if args.enable_wandb:
         train_utils.wandb_config_update(args, lyapunov_relu, controller_relu,
                                         x_lo, x_up, u_lo, u_up)
+
+
     if args.train_lqr_approximator:
         x_equilibrium = torch.cat(
             (q_equilibrium, torch.zeros((3, ), dtype=dtype)))
@@ -410,4 +442,18 @@ if __name__ == "__main__":
                                        derivative_state_samples_init, options)
     else:
         dut.train(torch.empty((0, 6), dtype=dtype))
+    # test controller
+    # Generate a grid of initial state)
+    xdot_samples = np.random.uniform(-8, 8, 50)
+    zdot_samples = np.random.uniform(-8, 8, 50)
+    x0_grid = [np.array([-0.75, 0.3, 0.3*np.pi, xdot, zdot, 2]) for xdot in xdot_samples for zdot in zdot_samples]
+
+    # Assume controller_relu is already loaded
+    t_span = (0, 5.0)
+    success_mask = evaluate_controller(controller_relu, x0_grid, t_span)
+
+    # Plot
+    plot_stabilization_result(x0_grid, success_mask)
+
+
     pass
