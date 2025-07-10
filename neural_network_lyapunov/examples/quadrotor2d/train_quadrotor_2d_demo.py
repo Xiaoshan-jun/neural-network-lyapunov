@@ -264,7 +264,7 @@ if __name__ == "__main__":
     parser.add_argument("--training_set", type=str, default=None)
     args = parser.parse_args()
     dir_path = os.path.dirname(os.path.realpath(__file__))
-    dt = 0.01
+    dt = 0.01 #integration time step, simulating the system by 0.01 second every step
     dtype = torch.float64
     if args.generate_dynamics_data:
         print("generate dynamic dataset")
@@ -272,7 +272,7 @@ if __name__ == "__main__":
         torch.save((model_dataset.tensors[0], model_dataset.tensors[1]), dir_path + "/data/dynamic.pt")
     elif args.load_dynamics_data is not None:
         model_dataset = torch.load(dir_path + args.load_dynamics_data)
-
+    #------------------------------------train the dynamic model----------------------------------------------------
     if args.train_forward_model:
         print('initialize forward nn model')
         forward_model = utils.setup_relu((4, 6, 6, 3),
@@ -290,14 +290,14 @@ if __name__ == "__main__":
             negative_slope=forward_model_data["negative_slope"],
             dtype=dtype)
         forward_model.load_state_dict(forward_model_data["state_dict"])
-
-    plant = quadrotor_2d.Quadrotor2D(dtype)
-    x_star = np.zeros((6, ))
-    u_star = plant.u_equilibrium.detach().numpy()
-    lqr_Q = np.diag([10, 10, 10, 1, 1, plant.length / 2. / np.pi])
-    lqr_R = np.array([[0.1, 0.05], [0.05, 0.1]])
-    K, S = plant.lqr_control(lqr_Q, lqr_R, x_star, u_star)
-    S_eig_value, S_eig_vec = np.linalg.eig(S)
+    # ------------------------------------train the dynamic model----------------------------------------------------
+    plant = quadrotor_2d.Quadrotor2D(dtype) #real dynamic simulator
+    x_star = np.zeros((6, )) #state equilibrium
+    u_star = plant.u_equilibrium.detach().numpy() # control equilibrium, against the gravity
+    lqr_Q = np.diag([10, 10, 10, 1, 1, plant.length / 2. / np.pi]) #for LQR
+    lqr_R = np.array([[0.1, 0.05], [0.05, 0.1]]) #for LQR
+    K, S = plant.lqr_control(lqr_Q, lqr_R, x_star, u_star) #feedback gain and solution to the continuous-time Algebraic Riccati Equation, gives the cost-to-go approximation
+    S_eig_value, S_eig_vec = np.linalg.eig(S) #Computes the eigenvalues and eigenvectors of the matrix SS, which are useful for
 
     # R = torch.zeros((9, 6), dtype=dtype)
     # R[:3, :3] = torch.eye(3, dtype=dtype)
